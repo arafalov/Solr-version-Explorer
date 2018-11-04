@@ -14,6 +14,8 @@ import org.eclipse.jgit.treewalk.TreeWalk;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
+import java.nio.file.FileSystems;
+import java.nio.file.Path;
 import java.util.*;
 
 /**
@@ -22,10 +24,11 @@ import java.util.*;
 public class Indexer {
 
     private static TreeMap<String, String> firstOccurance = new TreeMap<>();
-    private static TreeMap<String, String> classToFile = new TreeMap<>();
+    private static TreeMap<String, String> currentFileToPath = new TreeMap<>();
     private static TreeMap<String, TreeSet<String>> tagToFiles = new TreeMap<>();
 
     private static String[] hierarchyRoots;
+    private static String gitRepoRoot;
 
     public static void main(String[] args) throws IOException {
         String propertiesFilePath = args[0];
@@ -35,7 +38,7 @@ public class Indexer {
         // JavaDoc likes its paths' separated by colons.
         // Let's do it for our tags list too.
 
-        String gitRepoRoot = props.getProperty("gitRepoRoot");
+        gitRepoRoot = props.getProperty("gitRepoRoot");
 
         //release tags, but could also include an active branch to pick up next-version files
         String[] tagsList = props.getProperty("tagsList").split(":");
@@ -79,15 +82,20 @@ public class Indexer {
                     if (firstOccurance.containsKey(fileName) && firstOccurance.get(fileName) == null) {
                         // we do not have explicit @version tag yet for this file
                         String tagNameVersion = tagName.substring(tagName.lastIndexOf('/') + 1); //remove leading tag path
-                        String filePath = treeWalk.getPathString();
+                        String introducedFilePath = treeWalk.getPathString();
                         System.out.printf("Found %s at %s in version %s\n",
-                                fileName, filePath, tagNameVersion);
+                                fileName, introducedFilePath, tagNameVersion);
+                        String currentFilePath = currentFileToPath.get(fileName);
+                        if (!introducedFilePath.equals(currentFilePath)) {
+                            System.out.printf("File moved from original position '%s' => '%s'. Using new path!\n", introducedFilePath, currentFilePath);
+                        }
+
                         firstOccurance.put(fileName, tagNameVersion);
                         if (tagToFiles.containsKey(tagNameVersion)){
-                            tagToFiles.get(tagNameVersion).add(filePath);
+                            tagToFiles.get(tagNameVersion).add(currentFilePath);
                         } else {
                             TreeSet<String> filePaths = new TreeSet<>();
-                            filePaths.add(filePath);
+                            filePaths.add(currentFilePath);
                             tagToFiles.put(tagNameVersion, filePaths);
                         }
 
@@ -141,6 +149,7 @@ public class Indexer {
      */
     public static boolean start(RootDoc root) {
         System.out.println("ClassDoc packages: " + root.classes().length);
+        Path rootPath = FileSystems.getDefault().getPath(gitRepoRoot);
 
         for (String hierarchyRoot: hierarchyRoots) {
             ClassDoc hierarchyRootDoc = root.classNamed(hierarchyRoot);
@@ -173,14 +182,15 @@ public class Indexer {
                 }
 
 
-                String containingFile = classDoc.position().file().getName();
+                Path containingPath = classDoc.position().file().toPath();
+                String containingFileName = containingPath.getFileName().toString();
                 String className = classDoc.name();
-                System.out.printf("Class: %s (%s): @since: %s\n", className, containingFile, (sinceVal == null) ? "not found" : sinceVal);
-                classToFile.put(className, containingFile);
-                if (firstOccurance.containsKey(containingFile)) {
-                    System.err.printf("Already stored %s from %s, must be an inner class; skipping!\n", className, containingFile);
+                System.out.printf("Class: %s (%s): @since: %s\n", className, containingFileName, (sinceVal == null) ? "not found" : sinceVal);
+                currentFileToPath.put(containingFileName, rootPath.relativize(containingPath).toString());
+                if (firstOccurance.containsKey(containingFileName)) {
+                    System.err.printf("Already stored %s from %s, must be an inner class; skipping!\n", className, containingFileName);
                 } else {
-                    firstOccurance.put(containingFile, sinceVal);
+                    firstOccurance.put(containingFileName, sinceVal);
                 }
             }
         }
